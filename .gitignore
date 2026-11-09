@@ -6,3 +6,4 @@ report-*.json
 summary-*.md
 agentsec-report.json
 agentsec-summary.md
+targets/lab/

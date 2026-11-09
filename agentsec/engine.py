@@ -5,7 +5,9 @@ import base64
 import re
 import time
 import uuid
+from dataclasses import asdict
 from pathlib import Path
+from typing import Callable
 
 import yaml
 
@@ -13,6 +15,14 @@ from .adapters.http import request
 from .model import INVOKED, Capability, Graph, Observation, SecurityTest
 
 LIBRARY = Path(__file__).with_name("attacks.yaml")
+PLACEHOLDER = re.compile(r"\{(\w+)\}")
+BUILTIN = {"tool", "canary"}
+
+Emit = Callable[[str, dict], None]
+
+
+def _noop(event: str, data: dict) -> None:
+    pass
 
 
 def load_library(path: str | Path = LIBRARY) -> list[dict]:
@@ -30,17 +40,36 @@ def _render(text: str, values: dict) -> str:
     return re.sub(r"\{b64:([^{}]*)\}", lambda m: base64.b64encode(m.group(1).encode()).decode(), text)
 
 
+def test_data(cfg: dict) -> dict:
+    """Target-specific values attacks may reference (record ids etc.) from `testData` in target.yaml."""
+    td = cfg.get("testData") or {}
+    values = {}
+    if td.get("sampleId"):
+        values["sample_id"] = td["sampleId"]
+    rng = td.get("idRange")
+    if isinstance(rng, list) and len(rng) == 2:
+        values["range_start"], values["range_end"] = rng
+    return values
+
+
 def select(caps: list[Capability], cfg: dict, library: list[dict] | None = None) -> tuple[list[SecurityTest], list[dict]]:
     """Instantiate tests that are applicable to what was discovered."""
     selected, skipped = [], []
     canary = cfg["agent"].get("canary")
+    base = test_data(cfg)
     for t in library or load_library():
         criteria = t.get("applicable_to") or {}
-        cap = next((c for c in caps if _matches(c, criteria)), None) if criteria else None
+        cap = next((c for c in caps if _matches(c, criteria) and c.effective), None) if criteria else None
+        cap = cap or (next((c for c in caps if _matches(c, criteria)), None) if criteria else None)
         if criteria and cap is None:
             skipped.append({"id": t["id"], "name": t["name"], "reason": f"no capability matching {criteria}"})
             continue
-        values = {"tool": cap.tool if cap else ""}
+        templates = t["message"] + "".join(d["content"] for d in t.get("documents", []))
+        missing = sorted(set(PLACEHOLDER.findall(templates)) - BUILTIN - set(base))
+        if missing:
+            skipped.append({"id": t["id"], "name": t["name"], "reason": f"testData missing: {', '.join(missing)}"})
+            continue
+        values = {**base, "tool": cap.tool if cap else ""}
         oracle = dict(t["oracle"])
         if "response_must_not_match" in oracle:
             pats = [p for p in oracle["response_must_not_match"] if "{canary}" not in p or canary]
@@ -93,9 +122,12 @@ def evaluate(test: SecurityTest, obs: Observation, caps: dict[str, Capability]) 
         if re.search(pat, obs.response):
             obs.verdict = "FAIL"
             obs.reasons.append(f"Response matched disclosure pattern /{pat}/")
+    if obs.verdict == "PASS" and not obs.reasons:
+        obs.reasons.append("No prohibited tool execution or disclosure observed")
 
 
-def run(tests: list[SecurityTest], cfg: dict, caps: list[Capability], graph: Graph, log=print) -> list[Observation]:
+def run(tests: list[SecurityTest], cfg: dict, caps: list[Capability], graph: Graph,
+        emit: Emit = _noop) -> list[Observation]:
     run_id = uuid.uuid4().hex[:8]
     cap_by_tool = {c.tool: c for c in caps}
     agent_id = f"agent:{cfg['target']['name']}"
@@ -103,20 +135,22 @@ def run(tests: list[SecurityTest], cfg: dict, caps: list[Capability], graph: Gra
     observations = []
     for t in tests:
         trace_id = f"{t.id}-{run_id}"
+        emit("test_start", {**asdict(t), "traceId": trace_id, "tool": t.applicable_to.get("tool")})
         status, body = request("POST", cfg["agent"]["endpoint"],
                                {"message": t.message, "documents": t.documents, "sessionId": trace_id},
                                headers={**headers, "X-AgentSec-Test-Id": trace_id})
         obs = Observation(test_id=t.id, run_id=run_id, response=str(body.get("response", body)), tool_calls=[])
+        emit("test_response", {"id": t.id, "status": status, "response": obs.response})
         if status != 200:
             obs.verdict = "ERROR"
             obs.reasons.append(f"Agent returned HTTP {status}")
         else:
             obs.tool_calls = collect_telemetry(cfg, trace_id)
+            emit("test_telemetry", {"id": t.id, "events": obs.tool_calls})
             evaluate(t, obs, cap_by_tool)
         for ev in obs.tool_calls:
             graph.add_edge(agent_id, INVOKED, f"tool:{ev['tool']}", testId=t.id, status=ev.get("status"),
                            recordsReturned=ev.get("recordsReturned", 0), timestamp=ev.get("timestamp"))
-        mark = {"PASS": "✓", "FAIL": "✗", "ERROR": "!"}[obs.verdict]
-        log(f"  {mark} {t.id:<9} {obs.verdict:<5} {t.name}")
+        emit("test_result", {"id": t.id, "name": t.name, "verdict": obs.verdict, "reasons": obs.reasons})
         observations.append(obs)
     return observations

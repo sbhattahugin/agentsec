@@ -2,6 +2,7 @@
 
     agentsec discover target.yaml
     agentsec scan target.yaml [--policy policies.yaml] [--output report.json] [--markdown summary.md]
+    agentsec ui [--targets DIR] [--port 8080]
 
 Exit codes: 0 = gate passed, 1 = gate failed, 2 = scan error.
 """
@@ -13,21 +14,58 @@ import os
 import sys
 from dataclasses import asdict
 
-from . import __version__, analysis, discovery, engine, policy, report
+from . import __version__, discovery, policy, report, scanner
 from .config import load_target
 
 
-def _discover(cfg):
-    print(f"▶ Discovery: {cfg['target']['name']} ({cfg['target'].get('environment', 'n/a')})")
-    graph, caps, raw = discovery.discover(cfg)
-    print("\n▶ Normalized capability graph")
-    report.print_graph(graph)
-    return graph, caps, raw
+def _utf8_stdout() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
+class Console:
+    """Renders scanner events as the classic console output."""
+
+    def __init__(self, log=print):
+        self.log = log
+
+    def __call__(self, event: str, d: dict) -> None:
+        log = self.log
+        if event == "target":
+            log(f"▶ Discovery: {d['name']} ({d.get('environment') or 'n/a'})")
+        elif event == "log":
+            log(d["message"])
+        elif event == "graph" and d["stage"] == "normalized":
+            log("\n▶ Normalized capability graph")
+            report.print_graph(d["graph"], log)
+        elif event == "static_findings":
+            log("\n▶ Static analysis (policy vs. discovered configuration)")
+            for f in d["findings"]:
+                log(f"  {report.ICON[f['risk']['severity']]} {f['title']}")
+            if not d["findings"]:
+                log("  no static policy violations")
+        elif event == "tests_selected":
+            self.skipped = d["skipped"]
+            log(f"\n▶ Adversarial tests ({len(d['tests'])} applicable, {len(d['skipped'])} skipped)")
+        elif event == "test_result":
+            mark = {"PASS": "✓", "FAIL": "✗"}.get(d["verdict"], "!")
+            log(f"  {mark} {d['id']:<9} {d['verdict']:<5} {d['name']}")
+            for r in d["reasons"]:
+                log(f"      {r}")
+        elif event == "phase" and d["id"] == "attack" and d["status"] == "done":
+            for s in getattr(self, "skipped", []):
+                log(f"  - {s['id']:<9} SKIP  {s['name']} ({s['reason']})")
 
 
 def cmd_discover(args) -> int:
     cfg = load_target(args.target)
-    graph, caps, raw = _discover(cfg)
+    print(f"▶ Discovery: {cfg['target']['name']} ({cfg['target'].get('environment', 'n/a')})")
+    graph, caps, raw = discovery.discover(cfg)
+    print("\n▶ Normalized capability graph")
+    report.print_graph(graph)
     if args.output:
         with open(args.output, "w", encoding="utf-8") as f:
             json.dump({"capabilities": [asdict(c) for c in caps], "graph": graph.to_dict(),
@@ -39,33 +77,13 @@ def cmd_discover(args) -> int:
 def cmd_scan(args) -> int:
     cfg = load_target(args.target)
     pol = policy.load(args.policy)
-    fail_on = args.fail_on or pol["gate"].get("failOn", "high")
-
-    graph, caps, raw = _discover(cfg)
-
-    print("\n▶ Static analysis (policy vs. discovered configuration)")
-    findings = analysis.static_findings(graph, caps, pol["policies"])
-    for f in findings:
-        print(f"  {report.ICON[f.risk.severity]} {f.title}")
-    if not findings:
-        print("  no static policy violations")
-
-    tests, skipped, observations = [], [], []
-    if not args.static_only:
-        tests, skipped = engine.select(caps, cfg, engine.load_library(args.attacks) if args.attacks else None)
-        print(f"\n▶ Adversarial tests ({len(tests)} applicable, {len(skipped)} skipped)")
-        observations = engine.run(tests, cfg, caps, graph)
-        for s in skipped:
-            print(f"  - {s['id']:<9} SKIP  {s['name']} ({s['reason']})")
-        findings += analysis.dynamic_findings(graph, caps, tests, observations, pol["policies"])
-
-    summary = report.summarize(tests, skipped, observations, findings, fail_on)
-    report.print_report(summary, findings, graph)
-
+    result = scanner.scan(cfg, pol, Console(), attacks=args.attacks, static_only=args.static_only,
+                          fail_on=args.fail_on)
+    summary, findings = result["summary"], result["findings"]
+    report.print_report(summary, findings, result["graph"])
     if args.output:
         with open(args.output, "w", encoding="utf-8") as f:
-            json.dump(report.to_json(cfg, graph, caps, raw, tests, skipped, observations, findings, summary),
-                      f, indent=2, default=str)
+            json.dump(result["report"], f, indent=2, default=str)
         print(f"Report: {args.output}")
     md = report.markdown(cfg, summary, findings)
     if args.markdown:
@@ -77,7 +95,14 @@ def cmd_scan(args) -> int:
     return 1 if summary["gate"]["result"] == "FAIL" else 0
 
 
+def cmd_ui(args) -> int:
+    from .ui.server import serve
+    serve(args.targets, host=args.host, port=args.port, policy_path=args.policy, open_browser=args.open)
+    return 0
+
+
 def main(argv=None) -> int:
+    _utf8_stdout()
     p = argparse.ArgumentParser(prog="agentsec", description="Security testing for AI agents.")
     p.add_argument("--version", action="version", version=f"agentsec {__version__}")
     sub = p.add_subparsers(dest="command", required=True)
@@ -97,9 +122,19 @@ def main(argv=None) -> int:
     s.add_argument("--markdown", help="Write Markdown summary")
     s.set_defaults(func=cmd_scan)
 
+    u = sub.add_parser("ui", help="Web console: pick a target, watch the scan live")
+    u.add_argument("--targets", default="targets", help="Directory with target YAML files (searched recursively)")
+    u.add_argument("--policy", help="Policy YAML")
+    u.add_argument("--host", default="127.0.0.1")
+    u.add_argument("--port", type=int, default=8080)
+    u.add_argument("--open", action="store_true", help="Open the browser")
+    u.set_defaults(func=cmd_ui)
+
     args = p.parse_args(argv)
     try:
         return args.func(args)
+    except KeyboardInterrupt:
+        return 130
     except Exception as e:  # noqa: BLE001
         print(f"agentsec: error: {e}", file=sys.stderr)
         return 2

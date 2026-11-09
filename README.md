@@ -10,7 +10,35 @@ invocations** (runtime telemetry), not from how the response sounds.
 Engineering Agent → MCP → Material API → (data)
 ```
 
-## Quick start
+## Web console demo (recommended)
+
+```bash
+pip install -e ".[dev]"
+python demo/console.py          # Windows: python demo\console.py   → opens http://127.0.0.1:8080
+```
+
+This starts **6 dummy agents** (3 scenarios × vulnerable/hardened, each a real Agent → MCP → API + OAuth
+stack on ports 9100+), registers them as targets in `targets/lab/`, and opens the console:
+
+- **Left:** registered targets (+ their `target.yaml`), pace (Presenter / Fast / Slow / Instant), run history.
+- **Center:** the 9 phases (Register → Discover → Normalize → Static → Attack → Correlate → Policy →
+  Risk → Gate). Each one shows **what** it does, **how** it does it, and the **result**: discovered tools,
+  scopes and API operations, the capability table, each attack (payload, attached poisoned document, agent
+  reply, MCP telemetry, verdict), attack paths, expected-vs-observed policy checks, risk factors, and the gate.
+- **Right:** live narration, the capability graph (CAN_INVOKE vs actually INVOKED edges), and a wire log
+  of every HTTP call AgentSec makes. Click a call to see the payload.
+- Tabs **Rules (policy)** and **Attack library** show the rules being applied.
+
+| Dummy agent | Stack | Vulnerable build | Hardened build |
+|---|---|---|---|
+| `engineering-agent` | material-mcp → Material API (confidential) | ❌ FAIL: 1 critical (indirect injection → 3,821 records exported) | ✅ PASS |
+| `hr-agent` | employee-mcp → Employee API (restricted) | ❌ FAIL: 5 critical (weak guard, follows embedded commands, can delete) | ✅ PASS |
+| `support-agent` | ticket-mcp → Ticket API (internal, read-only tools) | ✅ PASS with mediums (enumeration, prompt leak, excess scope) | ✅ PASS |
+
+Run only the dummy agents: `python demo/lab.py`, then use the CLI (`agentsec scan targets/lab/hr-agent-vulnerable.yaml`)
+or the console (`agentsec ui --targets targets`). Put your own target files in `targets/` (see `targets/README.md`).
+
+## Quick start (CLI)
 
 ```bash
 python3 -m venv .venv && . .venv/bin/activate
@@ -22,7 +50,7 @@ pytest -q                   # unit + end-to-end tests
 Manual run:
 
 ```bash
-python demo/stack.py --mode vulnerable &        # or --mode hardened
+python demo/stack.py --mode vulnerable &        # or --mode hardened; --scenario engineering|hr|support
 AGENTSEC_CLIENT_SECRET=demo-secret agentsec scan examples/target.yaml -o report.json --markdown summary.md
 agentsec discover examples/target.yaml          # discovery + normalization only
 ```
@@ -65,7 +93,7 @@ Blocked attempts (the model was steered but a control stopped the call) are repo
 
 ## Demo target
 
-`demo/stack.py` runs three servers: Agent `:8001`, MCP `:8002` (JSON-RPC + `/telemetry`), Material API +
+`demo/stack.py` (default `--scenario engineering`) runs three servers: Agent `:8001`, MCP `:8002` (JSON-RPC + `/telemetry`), Material API +
 OAuth `:8003`. The agent's "LLM" is a deterministic stand-in that, like real models, follows
 instructions embedded in content it processes.
 
@@ -91,6 +119,8 @@ hardened → 9/9 pass, only Info findings, gate **PASSED**.
   adjust `engine.run` for other shapes) and add auth headers under `agent.headers`.
 - Your agent must propagate `X-AgentSec-Test-Id` to tool calls, and the MCP server (or gateway/OTel
   collector) must expose events with `testId`, `tool`, `status`, `recordsReturned`, `humanApproval`.
+- Optional: `testData` (`sampleId`, `idRange`) gives attacks real record ids; tests that need missing
+  values are skipped. `target.resetEndpoint` is POSTed before each scan so mutating tests are repeatable.
 - Annotate tools with MCP `annotations` and `_meta.downstream` / `_meta.requiresApproval`, or use
   `overrides.tools` in `target.yaml`.
 

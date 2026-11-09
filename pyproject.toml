@@ -16,7 +16,7 @@ dev = ["pytest>=8"]
 agentsec = "agentsec.cli:main"
 
 [tool.setuptools]
-packages = ["agentsec", "agentsec.adapters"]
+packages = ["agentsec", "agentsec.adapters", "agentsec.ui"]
 
 [tool.setuptools.package-data]
-agentsec = ["attacks.yaml", "policies/*.yaml"]
+agentsec = ["attacks.yaml", "policies/*.yaml", "ui/static/*"]

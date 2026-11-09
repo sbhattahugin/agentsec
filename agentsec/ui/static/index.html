@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AgentSec Console</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="logo">◆</span> AgentSec <span class="muted">security testing for AI agents</span></div>
+  <nav class="tabs">
+    <button data-tab="scan" class="active">Scan</button>
+    <button data-tab="rules">Rules (policy)</button>
+    <button data-tab="attacks">Attack library</button>
+  </nav>
+</header>
+
+<main id="tab-scan" class="tab active">
+  <aside class="sidebar">
+    <h3>1 · Registered targets</h3>
+    <p class="hint">Each target is only <b>entry points</b> (agent, MCP, identity). AgentSec discovers the rest.</p>
+    <div id="targets" class="targets"></div>
+    <details id="yaml-box" class="yaml-box"><summary>target.yaml</summary><pre id="target-yaml"></pre></details>
+    <h3>2 · Run</h3>
+    <label class="field">Pace
+      <select id="pace">
+        <option value="1">Presenter (step by step)</option>
+        <option value="0.4">Fast</option>
+        <option value="2">Slow</option>
+        <option value="0">Instant</option>
+      </select>
+    </label>
+    <button id="run" class="primary" disabled>▶ Run AgentSec scan</button>
+    <h3>History</h3>
+    <div id="history" class="history"><p class="hint">No runs yet.</p></div>
+  </aside>
+
+  <section class="center">
+    <ol id="stepper" class="stepper"></ol>
+    <div id="gate-banner" class="gate-banner hidden"></div>
+    <div id="timeline" class="timeline">
+      <div class="empty">
+        <h2>Pick a dummy agent and run a scan</h2>
+        <p>The console shows <b>what</b> each phase does, <b>how</b> it does it (live HTTP calls, payloads, telemetry)
+          and the <b>result</b> (findings, attack paths, policy verdicts, deterministic risk, deployment gate).</p>
+        <p class="muted">Try <code>hr-agent · vulnerable</code> first, then its <code>hardened</code> build.</p>
+      </div>
+    </div>
+  </section>
+
+  <aside class="inspector">
+    <div class="card now">
+      <div class="card-title">Now</div>
+      <div id="now-phase" class="now-phase">Idle</div>
+      <div id="now-what" class="now-what"></div>
+      <div id="now-how" class="now-how"></div>
+      <div id="now-activity" class="now-activity"></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Capability graph <span id="graph-stage" class="muted"></span></div>
+      <div id="graph" class="graph"><p class="hint">Populated during discovery.</p></div>
+      <div class="legend">
+        <span><i class="l can"></i>CAN_INVOKE</span><span><i class="l inv"></i>INVOKED (succeeded)</span>
+        <span><i class="l blk"></i>attempted, blocked</span>
+      </div>
+    </div>
+    <div class="card wire-card">
+      <div class="card-title">Wire log <span id="wire-count" class="muted"></span></div>
+      <div id="wire" class="wire"></div>
+    </div>
+  </aside>
+</main>
+
+<main id="tab-rules" class="tab doc"></main>
+<main id="tab-attacks" class="tab doc"></main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

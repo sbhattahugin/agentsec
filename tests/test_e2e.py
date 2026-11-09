@@ -35,6 +35,7 @@ def stack(request, tmp_path, monkeypatch):
             time.sleep(0.1)
     cfg = yaml.safe_load((ROOT / "examples" / "target.yaml").read_text())
     cfg["agent"]["endpoint"] = f"http://127.0.0.1:{agent}/api/chat"
+    cfg["target"]["resetEndpoint"] = f"http://127.0.0.1:{api}/admin/reset"
     cfg["connections"][0].update(endpoint=f"http://127.0.0.1:{mcp}", telemetry=f"http://127.0.0.1:{mcp}/telemetry")
     cfg["security"]["identity"].update(token_endpoint=f"http://127.0.0.1:{api}/oauth/token",
                                        introspection_endpoint=f"http://127.0.0.1:{api}/oauth/introspect")

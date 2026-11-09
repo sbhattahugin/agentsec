@@ -4,14 +4,32 @@ from __future__ import annotations
 import json
 from dataclasses import asdict
 
-from .model import CAN_INVOKE, INVOKED, Finding, Graph
+from .model import CAN_INVOKE, INVOKED, Edge, Finding, Graph, Node
 from .risk import ORDER
 
 ICON = {"critical": "🔴", "high": "🟠", "medium": "🟡", "low": "⚪", "info": "🔵"}
 
 
-def _sorted(findings: list[Finding]) -> list[Finding]:
+def sort_findings(findings: list[Finding]) -> list[Finding]:
     return sorted(findings, key=lambda f: (-ORDER.index(f.risk.severity), -f.risk.score, f.id))
+
+
+_sorted = sort_findings
+
+
+def finding_dict(f: Finding) -> dict:
+    return {**asdict(f), "attack_path": f.attack_path.steps if f.attack_path else None}
+
+
+def _as_graph(graph) -> Graph:
+    if isinstance(graph, Graph):
+        return graph
+    g = Graph()
+    for n in graph["nodes"]:
+        g.add_node(Node(**n))
+    for e in graph["edges"]:
+        g.edges.append(Edge(**e))
+    return g
 
 
 def summarize(tests, skipped, observations, findings, fail_on: str) -> dict:
@@ -38,12 +56,12 @@ def to_json(cfg, graph: Graph, caps, raw, tests, skipped, observations, findings
         "tests": [asdict(t) for t in tests],
         "skippedTests": skipped,
         "observations": [asdict(o) for o in observations],
-        "findings": [{**asdict(f), "attack_path": f.attack_path.steps if f.attack_path else None}
-                     for f in _sorted(findings)],
+        "findings": [finding_dict(f) for f in _sorted(findings)],
     }
 
 
-def print_graph(graph: Graph, log=print) -> None:
+def print_graph(graph, log=print) -> None:
+    graph = _as_graph(graph)
     agent = graph.of_type("Agent")[0]
     log(f"  {agent.name}")
     edges = graph.out(agent.id, CAN_INVOKE)
@@ -64,7 +82,8 @@ def print_graph(graph: Graph, log=print) -> None:
             log(f"  {'└' if i == len(perms) - 1 else '├'}─ HAS_PERMISSION → {p}")
 
 
-def print_report(summary: dict, findings: list[Finding], graph: Graph, log=print) -> None:
+def print_report(summary: dict, findings: list[Finding], graph, log=print) -> None:
+    graph = _as_graph(graph)
     invoked = [e for e in graph.edges if e.rel == INVOKED and e.props.get("status") == "success"]
     if invoked:
         log("\n▶ Observed (runtime evidence)")
