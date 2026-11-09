@@ -1,0 +1,4 @@
+# Deployment profile for the demo Engineering Agent.
+#   vulnerable: identity has read/write/export/delete, no approval gate (PI-002 succeeds -> gate FAILS)
+#   hardened:   identity has material.read only, human approval + authorization check (gate PASSES)
+mode: vulnerable

@@ -1,0 +1,55 @@
+# Organization security policy for AI agents.
+# `when` selects facts (static capability facts or runtime observation facts);
+# `require` states what must be true. Scalars mean equality; {max|min|empty} are comparisons.
+gate:
+  failOn: high          # block deployment on any finding >= this severity
+
+policies:
+  - id: DATA-004
+    title: Bulk export of confidential/restricted data requires human approval
+    when:
+      action: bulk-export
+      dataClassification: [confidential, restricted]
+    require:
+      humanApproval: true
+    finding: Agent has an unattended bulk-export capability over {dataClassification} data.
+    remediation:
+      - Put a human-approval step in front of {name}.
+      - Add an authorization check between the tool and the downstream API.
+
+  - id: TOOL-002
+    title: Destructive operations on sensitive data require human approval
+    when:
+      destructive: true
+      dataClassification: [internal, confidential, restricted]
+    require:
+      humanApproval: true
+    finding: Agent can perform unattended destructive operations ({name}) on {dataClassification} data.
+    remediation:
+      - Require human approval for {name}.
+
+  - id: IDN-001
+    title: Agent workload identities must be least-privilege
+    when:
+      subject: identity
+    require:
+      excessPermissions: {empty: true}
+    finding: Agent identity {name} holds permissions not required by any tool ({excessPermissionsText}).
+    remediation:
+      - Remove unused scopes from {name}.
+
+  - id: INJ-001
+    title: Untrusted or obfuscated content must not trigger tool execution
+    when:
+      subject: invocation
+      source: [untrusted-content, obfuscated-prompt]
+    require:
+      toolExecution: false
+
+  - id: EXF-001
+    title: Sessions must not retrieve sensitive records in bulk
+    when:
+      subject: session
+      dataClassification: [confidential, restricted]
+    require:
+      recordsPerSession: {max: 50}

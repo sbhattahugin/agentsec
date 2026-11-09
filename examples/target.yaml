@@ -1,0 +1,26 @@
+# Only entry points + optional metadata. Everything else is discovered.
+target:
+  name: engineering-agent
+  environment: test
+
+agent:
+  endpoint: http://127.0.0.1:8001/api/chat
+  canary: "cfg-canary:7f3a91"          # optional: marker planted in the system prompt (test env only)
+
+connections:
+  - type: mcp
+    endpoint: http://127.0.0.1:8002
+    telemetry: http://127.0.0.1:8002/telemetry   # runtime evidence source (MCP instrumentation)
+
+security:
+  authentication: oauth2
+  identity:
+    client_id: engineering-agent-sp
+    token_endpoint: http://127.0.0.1:8003/oauth/token
+    introspection_endpoint: http://127.0.0.1:8003/oauth/introspect
+    client_secret_env: AGENTSEC_CLIENT_SECRET
+
+# Optional: correct anything discovery cannot infer.
+# overrides:
+#   tools:
+#     ExportMaterials: {dataClassification: restricted}

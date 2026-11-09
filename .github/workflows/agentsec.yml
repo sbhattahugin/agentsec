@@ -1,0 +1,58 @@
+name: Agent Security Gate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  agentsec:
+    name: AgentSec scan
+    runs-on: ubuntu-latest
+    env:
+      AGENTSEC_CLIENT_SECRET: ${{ secrets.AGENTSEC_CLIENT_SECRET || 'demo-secret' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install AgentSec
+        run: pip install -e ".[dev]"
+
+      - name: Unit tests
+        run: pytest -q tests/test_engines.py
+
+      # In a real pipeline this step deploys the agent to the test environment.
+      - name: Deploy test agent
+        run: |
+          MODE=$(python -c "import yaml; print(yaml.safe_load(open('demo/deployment.yaml'))['mode'])")
+          echo "Deploying engineering-agent (mode=$MODE)"
+          nohup python demo/stack.py --mode "$MODE" > stack.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf -o /dev/null http://127.0.0.1:8003/openapi.json && exit 0; sleep 1; done
+          cat stack.log; exit 1
+
+      - name: AgentSec (discovery → policy → adversarial tests → attack paths → gate)
+        run: agentsec scan examples/target.yaml --output agentsec-report.json --markdown agentsec-summary.md
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentsec-report
+          path: |
+            agentsec-report.json
+            agentsec-summary.md
+
+  deploy-production:
+    name: Deploy to production
+    needs: agentsec
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Security gate passed - deploying engineering-agent to production"
