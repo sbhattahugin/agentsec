@@ -1,0 +1,10 @@
+# Atlassian Rovo agent (Forge app). Rovo has no public invoke API -> static analysis of manifest.yml only.
+target:
+  name: jira-triage-agent
+  environment: test
+  platform: rovo
+discovery:
+  - type: forge-manifest
+    manifest: ./rovo-app/manifest.yml
+    dataClassification: confidential
+    assumeConfirmationForNonGet: true   # Rovo asks the user before non-GET actions

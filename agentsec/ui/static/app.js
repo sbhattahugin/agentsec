@@ -59,7 +59,7 @@ async function loadTargets() {
       const mode = t.labels?.mode;
       const el = h("div", { class: "target", onclick: () => selectTarget(t, el) },
         h("div", { class: "t-name" }, t.name, mode ? h("span", { class: `badge ${mode}` }, mode) : h("span", { class: "badge other" }, t.environment || "")),
-        h("div", { class: "t-desc" }, t.description || t.file));
+        h("div", { class: "t-desc" }, t.platform && !t.platform.startsWith("Custom") ? chip(t.platform, "blue") : null, " ", t.description || t.file));
       box.append(el);
     }
   }
@@ -211,6 +211,7 @@ const HANDLERS = {
     } else {
       step?.classList.remove("active");
       step?.classList.add(d.skipped ? "skipped" : "done");
+      if (d.skipped && d.reason) section(d.id).body.append(h("div", { class: "callout" }, "⚠ Attack phase skipped: ", d.reason));
       section(d.id).el.classList.replace("running", "done");
     }
   },
@@ -226,7 +227,14 @@ const HANDLERS = {
       h("div", { class: "kv" },
         h("span", { class: "k" }, "Target"), h("b", {}, `${d.name} (${d.environment || "n/a"})`),
         d.description ? [h("span", { class: "k" }, "Description"), h("span", {}, d.description)] : null,
-        h("span", { class: "k" }, "Agent endpoint"), h("code", {}, d.agent),
+        h("span", { class: "k" }, "Platform"), h("b", {}, d.platform || "Custom HTTP agent"),
+        h("span", { class: "k" }, "Adapters"), h("div", {},
+          [chip(`invoke: ${d.adapters?.invoker?.adapter || "none"}`, d.adapters?.invoker ? "blue" : "orange"),
+            ...(d.adapters?.discovery || []).map((x) => chip(`discover: ${x}`, "blue")),
+            ...(d.adapters?.telemetry || []).map((x) => chip(`telemetry: ${typeof x === "string" ? x : x.adapter}`, "blue")),
+            d.adapters?.identity ? chip(`identity: ${typeof d.adapters.identity === "string" ? d.adapters.identity : d.adapters.identity.adapter}`, "blue") : null]
+            .filter(Boolean).flatMap((c) => [c, " "])),
+        h("span", { class: "k" }, "Agent endpoint"), d.agent ? h("code", {}, d.agent) : h("span", { class: "muted" }, "none (static analysis only)"),
         h("span", { class: "k" }, "Connections"), h("div", {}, conns),
         h("span", { class: "k" }, "Authentication"), h("span", {}, `${d.authentication || "none"}${d.identity ? ` · client ${d.identity}` : ""}`),
         d.testData ? [h("span", { class: "k" }, "Test data"), h("code", {}, JSON.stringify(d.testData))] : null),
@@ -235,9 +243,15 @@ const HANDLERS = {
 
   discovered(d) {
     const boxes = [];
-    if (d.identity) boxes.push(h("div", { class: "box" }, h("h4", {}, "Identity adapter ", h("span", { class: "muted" }, "OAuth2 introspection")),
+    if (d.identity) boxes.push(h("div", { class: "box" }, h("h4", {}, "Identity adapter ", h("span", { class: "muted" }, [d.identity.kind, d.identity.auth].filter(Boolean).join(" · ") || "identity")),
       h("div", {}, "Subject ", h("b", {}, d.identity.subject)),
       h("div", {}, "Granted scopes: ", d.identity.scopes.map((x) => chip(x, /write|export|delete|admin/.test(x) ? "orange" : "")))));
+    for (const src of (d.sources || []).filter((x) => !["mcp", "openapi"].includes(x.type))) boxes.push(h("div", { class: "box" },
+      h("h4", {}, `${d.platform || src.type} adapter `, h("span", { class: "muted" }, `${src.type} · ${src.label || ""}`)),
+      src.tools.map((t) => h("div", {}, h("span", { style: "color:var(--green)" }, "✓ "), h("b", {}, t.name), h("span", { class: "muted" }, ` — ${t.description || t.source}`),
+        t.humanApproval ? chip("requires approval", "green") : null, t.destructive ? chip("destructive", "orange") : null)),
+      (src.knowledge || []).length ? h("div", { style: "margin-top:6px" }, "Knowledge: ",
+        src.knowledge.map((k) => chip(`${k.name}${k.scoped ? "" : " (un-scoped)"}`, k.scoped ? "" : "orange"))) : null));
     for (const m of d.mcp) boxes.push(h("div", { class: "box" }, h("h4", {}, "MCP adapter ", h("span", { class: "muted" }, `${m.server.name || ""} · tools/list`)),
       m.tools.map((t) => h("div", {}, h("span", { style: "color:var(--green)" }, "✓ "), h("b", {}, t.name), h("span", { class: "muted" }, ` — ${t.description}`),
         t.meta?.requiresApproval ? chip("requires approval", "green") : null, t.annotations?.destructiveHint ? chip("destructive", "orange") : null))));

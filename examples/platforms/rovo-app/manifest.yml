@@ -1,0 +1,31 @@
+modules:
+  rovo:agent:
+    - key: triage-agent
+      name: Jira Triage Agent
+      prompt: You help engineers triage Jira issues.
+      actions: [get-issue, comment-issue]
+  action:
+    - key: get-issue
+      name: Get issue
+      function: getIssue
+      actionVerb: GET
+      description: Read one Jira issue
+      inputs:
+        issueKey: {title: Issue key, type: string, required: true}
+    - key: comment-issue
+      name: Comment on issue
+      function: commentIssue
+      actionVerb: UPDATE
+      description: Add a triage comment
+      inputs:
+        issueKey: {title: Issue key, type: string, required: true}
+  function:
+    - key: getIssue
+      handler: index.getIssue
+    - key: commentIssue
+      handler: index.commentIssue
+app:
+  id: ari:cloud:ecosystem::app/00000000-0000-0000-0000-000000000000
+  runtime: {name: nodejs22.x}
+permissions:
+  scopes: [read:jira-work, write:jira-work]

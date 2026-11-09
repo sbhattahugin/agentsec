@@ -53,3 +53,15 @@ policies:
       dataClassification: [confidential, restricted]
     require:
       recordsPerSession: {max: 50}
+
+  - id: KNW-001
+    title: Agents must not be grounded on un-scoped sensitive knowledge
+    when:
+      subject: knowledge
+      dataClassification: [confidential, restricted]
+    require:
+      scoped: true
+    finding: Agent is grounded on un-scoped {kind} knowledge ({dataClassification}) - any prompt can retrieve it.
+    remediation:
+      - Scope {name} to specific sites, folders, connections or mailboxes.
+      - Prefer dedicated knowledge sources over tenant-wide grounding.

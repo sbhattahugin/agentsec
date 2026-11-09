@@ -51,7 +51,9 @@ def to_json(cfg, graph: Graph, caps, raw, tests, skipped, observations, findings
         "summary": summary,
         "discovery": {"identity": raw.get("identity"), "capabilities": [asdict(c) for c in caps],
                       "mcpServers": [m["server"] for m in raw.get("mcp", [])],
-                      "apis": [{"title": s["title"], "url": s["url"]} for s in raw.get("openapi", {}).values()]},
+                      "apis": [{"title": s["title"], "url": s["url"]} for s in raw.get("openapi", {}).values()],
+                      "platform": raw.get("platform"), "sources": raw.get("sources", []),
+                      "knowledge": raw.get("knowledge", [])},
         "graph": graph.to_dict(),
         "tests": [asdict(t) for t in tests],
         "skippedTests": skipped,
@@ -121,7 +123,9 @@ def markdown(cfg, summary: dict, findings: list[Finding]) -> str:
     s, t = summary, summary["tests"]
     gate = s["gate"]["result"]
     lines = [f"## {'❌ Agent Security Gate: FAILED' if gate == 'FAIL' else '✅ Agent Security Gate: PASSED'}",
-             "", f"Target: `{cfg['target']['name']}` ({cfg['target'].get('environment', 'n/a')})", "",
+             "", f"Target: `{cfg['target']['name']}` ({cfg['target'].get('environment', 'n/a')})"
+             + (f" - platform: {s['platform']}" if s.get("platform") else ""), "",
+             *([f"> ⚠️ Attack phase skipped: {s['attackSkipped']}", ""] if s.get("attackSkipped") else []),
              "| Tests | Passed | Failed | Skipped | " + " | ".join(k.title() for k in s["findings"]) + " |",
              "|---" * (4 + len(s["findings"])) + "|",
              f"| {t['total']} | {t['passed']} | {t['failed']} | {t['skipped']} | "

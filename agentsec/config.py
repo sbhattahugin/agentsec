@@ -12,12 +12,21 @@ def load_yaml(path: str | Path) -> dict:
 
 def load_target(path: str | Path) -> dict:
     cfg = load_yaml(path)
-    for key in ("target", "agent"):
-        if key not in cfg:
-            raise ValueError(f"{path}: missing required section '{key}'")
-    if "endpoint" not in cfg["agent"]:
-        raise ValueError(f"{path}: agent.endpoint is required")
+    if "target" not in cfg or not (cfg["target"] or {}).get("name"):
+        raise ValueError(f"{path}: missing required 'target.name'")
+    agent = cfg.get("agent") or {}
+    if not (agent.get("endpoint") or agent.get("adapter") or cfg.get("discovery") or cfg.get("connections")):
+        raise ValueError(f"{path}: define agent.endpoint, agent.adapter or at least one discovery source")
+    if agent and not agent.get("adapter") and "endpoint" not in agent:
+        raise ValueError(f"{path}: agent.endpoint is required (or set agent.adapter)")
+    return prepare(cfg, Path(path).resolve().parent)
+
+
+def prepare(cfg: dict, base_dir: Path | str = ".") -> dict:
+    cfg.setdefault("agent", {})
     cfg.setdefault("connections", [])
     cfg.setdefault("security", {})
     cfg.setdefault("overrides", {})
+    cfg.setdefault("defaults", {})
+    cfg.setdefault("_base_dir", str(base_dir))
     return cfg

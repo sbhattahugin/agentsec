@@ -1,0 +1,18 @@
+# Microsoft 365 Copilot declarative agent. Discovery is static from the Teams app package (folder or .zip).
+# Invocation via the Graph Copilot Chat API is beta, delegated-only and cannot pin a specific agent -
+# for reliable attacks, point agent.endpoint at a test harness instead and keep discovery from the package.
+target:
+  name: m365-engineering-agent
+  environment: test
+  platform: m365-copilot
+agent:
+  adapter: m365-copilot-chat
+  auth: {type: bearer, token_env: M365_COPILOT_TOKEN}   # delegated user token
+discovery:
+  - type: m365-package
+    package: ./m365-appPackage
+    tenantKnowledgeClassification: confidential          # classification of un-scoped OneDrive/SharePoint grounding
+telemetry:                                               # actions call your API/MCP: read its logs by conversation
+  - type: http-events
+    url: https://api.company.com/agentsec/events
+    match: "{conversationId}"

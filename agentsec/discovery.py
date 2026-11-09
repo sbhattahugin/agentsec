@@ -3,11 +3,10 @@ from __future__ import annotations
 
 import re
 
-from .adapters import identity as identity_adapter
-from .adapters import mcp as mcp_adapter
 from .adapters import openapi as openapi_adapter
-from .model import (ACCESSES, CAN_INVOKE, CONTAINS, EXECUTES_AS, GRANTS_ACCESS_TO, HAS_PERMISSION, REQUIRES,
-                    Capability, Graph, Node)
+from .model import (ACCESSES, CAN_INVOKE, CONTAINS, EXECUTES_AS, GRANTS_ACCESS_TO, GROUNDED_ON, HAS_PERMISSION,
+                    REQUIRES, Capability, Graph, Node)
+from .platforms.base import ToolSpec
 
 VERBS = [
     ("export", r"export|dump|bulk|download_?all|extract"),
@@ -30,74 +29,106 @@ def classify_operation(name: str, description: str = "") -> str:
     return "unknown"
 
 
-def discover(cfg: dict, log=print) -> tuple[Graph, list[Capability], dict]:
+def _resolve_openapi(ts: ToolSpec, specs: dict) -> tuple[dict | None, dict | None]:
+    """Find the downstream OpenAPI operation for a tool (spec URL or embedded spec)."""
+    if not ts.openapi or not ts.operationId:
+        return None, None
+    if isinstance(ts.openapi, dict):
+        spec = openapi_adapter.parse(ts.openapi, f"embedded:{ts.openapi.get('info', {}).get('title', ts.name)}")
+        specs.setdefault(spec["url"], spec)
+    else:
+        if ts.openapi not in specs:
+            specs[ts.openapi] = openapi_adapter.load(ts.openapi)
+        spec = specs[ts.openapi]
+    return spec, spec["operations"].get(ts.operationId)
+
+
+def normalize_tool(ts: ToolSpec, specs: dict, overrides: dict, defaults: dict) -> tuple[Capability, dict | None]:
+    spec, op = _resolve_openapi(ts, specs)
+    ov = overrides.get(ts.name, {})
+    operation = ov.get("operation") or ts.operation or classify_operation(ts.name, ts.description)
+    op_class = (op or {}).get("dataClassification")
+    data_class = (ov.get("dataClassification") or ts.dataClassification
+                  or (op_class if op_class and op_class != "unknown" else None)
+                  or defaults.get("dataClassification") or "unknown")
+    bulk = ts.bulk if ts.bulk is not None else (bool((op or {}).get("bulk")) or operation == "export")
+    approval = ts.humanApproval if ts.humanApproval is not None else bool(defaults.get("humanApproval", False))
+    cap = Capability(
+        tool=ts.name,
+        operation=operation,
+        bulkAccess=ov.get("bulkAccess", bulk),
+        dataClassification=data_class,
+        humanApproval=ov.get("humanApproval", approval),
+        destructive=ov.get("destructive", ts.destructive if ts.destructive is not None
+                           else operation in ("write", "delete")),
+        requiredPermissions=list(ov.get("requiredPermissions") or ts.requiredPermissions or (op or {}).get("scopes", [])),
+        effective=True,
+        resource=ov.get("resource") or ts.resource or (spec["title"] if op else None),
+        source=ts.source,
+    )
+    return cap, op
+
+
+def discover(cfg: dict, log=print, platform=None) -> tuple[Graph, list[Capability], dict]:
+    from . import platforms
+    platform = platform or platforms.build(cfg)
     g = Graph()
-    raw: dict = {"mcp": [], "openapi": {}, "identity": None}
+    raw: dict = {"mcp": [], "openapi": {}, "identity": None, "sources": [], "aliases": {},
+                 "platform": platform.describe()}
     target = cfg["target"]
     agent_id = f"agent:{target['name']}"
-    g.add_node(Node(agent_id, "Agent", target["name"], {"endpoint": cfg["agent"]["endpoint"],
+    inv = platform.invoker.describe() if platform.invoker else {}
+    g.add_node(Node(agent_id, "Agent", target["name"], {"endpoint": inv.get("endpoint"), "platform": platform.name,
                                                        "environment": target.get("environment")}))
 
-    # Identity adapter
-    ident = None
-    id_cfg = cfg["security"].get("identity")
-    if cfg["security"].get("authentication") == "oauth2" and id_cfg:
-        ident = identity_adapter.discover(id_cfg)
+    found: list = []
+    for d in platform.discoverers:
+        res = d.discover(log)
+        found.append(res)
+        raw["openapi"].update(res.raw.get("openapi", {}))
+        if "mcp" in res.raw:
+            raw["mcp"].append(res.raw["mcp"])
+
+    # Identity: dedicated identity adapter wins; otherwise one reported by a discoverer (e.g. Forge app scopes)
+    ident = platform.identity.discover(log) if platform.identity else next((r.identity for r in found if r.identity), None)
+    if ident is not None:
         raw["identity"] = ident
         ident_id = f"identity:{ident['subject']}"
-        g.add_node(Node(ident_id, "Identity", ident["subject"], {"kind": "workload", "auth": "oauth2"}))
+        g.add_node(Node(ident_id, "Identity", ident["subject"], {"kind": ident.get("kind", "workload"),
+                                                                 "auth": ident.get("auth"),
+                                                                 "checkLeastPrivilege": ident.get("checkLeastPrivilege", True)}))
         for scope in ident["scopes"]:
             g.add_node(Node(f"perm:{scope}", "Permission", scope))
             g.add_edge(ident_id, HAS_PERMISSION, f"perm:{scope}")
-        log(f"  identity  {ident['subject']}: {', '.join(ident['scopes'])}")
+        if platform.identity:
+            log(f"  identity  {ident['subject']}: {', '.join(ident['scopes']) or '(no permissions)'}")
 
-    # MCP adapter (+ OpenAPI adapter for downstream APIs referenced by tools or configured directly)
-    specs: dict[str, dict] = {}
-    for conn in cfg["connections"]:
-        if conn.get("type") == "openapi":
-            specs[conn["endpoint"]] = openapi_adapter.load(conn["endpoint"])
-
+    specs = raw["openapi"]
     caps: list[Capability] = []
-    overrides = cfg["overrides"].get("tools", {})
-    for conn in cfg["connections"]:
-        if conn.get("type") != "mcp":
-            continue
-        found = mcp_adapter.discover(conn["endpoint"])
-        raw["mcp"].append(found)
-        log(f"  mcp       {found['server'].get('name', conn['endpoint'])}: {len(found['tools'])} tools discovered")
-        for tool in found["tools"]:
-            meta = tool.get("_meta") or {}
-            ann = tool.get("annotations") or {}
-            down = meta.get("downstream") or {}
-            op = None
-            if down.get("openapi"):
-                if down["openapi"] not in specs:
-                    specs[down["openapi"]] = openapi_adapter.load(down["openapi"])
-                op = specs[down["openapi"]]["operations"].get(down.get("operationId"))
-
-            operation = classify_operation(tool["name"], tool.get("description", ""))
-            data_class = (op or {}).get("dataClassification", "unknown")
-            ov = overrides.get(tool["name"], {})
-            cap = Capability(
-                tool=tool["name"],
-                operation=ov.get("operation", operation),
-                bulkAccess=ov.get("bulkAccess", bool((op or {}).get("bulk")) or operation == "export"),
-                dataClassification=ov.get("dataClassification", data_class),
-                humanApproval=ov.get("humanApproval", bool(meta.get("requiresApproval", False))),
-                destructive=bool(ann.get("destructiveHint", operation in ("write", "delete"))),
-                requiredPermissions=(op or {}).get("scopes", []),
-                effective=True,
-                resource=specs[down["openapi"]]["title"] if op else None,
-            )
+    overrides = (cfg.get("overrides") or {}).get("tools", {})
+    defaults = cfg.get("defaults") or {}
+    for res in found:
+        raw["sources"].append({"type": res.source, "label": res.label, "agent": res.agent,
+                               "knowledge": res.knowledge,
+                               "tools": [{"name": t.name, "description": t.description, "source": t.source,
+                                          "attributes": t.attributes, "humanApproval": t.humanApproval,
+                                          "destructive": t.destructive} for t in res.tools]})
+        for ts in res.tools:
+            if any(c.tool == ts.name for c in caps):
+                continue
+            cap, op = normalize_tool(ts, specs, overrides, defaults)
             if ident is not None and cap.requiredPermissions:
-                cap.effective = set(cap.requiredPermissions) <= set(ident["scopes"])
+                held = {s.lower() for s in ident["scopes"]}
+                cap.effective = {p.lower() for p in cap.requiredPermissions} <= held
             caps.append(cap)
+            for alias in ts.aliases:
+                raw["aliases"][alias] = ts.name
 
-            tool_id = f"tool:{tool['name']}"
-            g.add_node(Node(tool_id, "Tool", tool["name"], {
+            tool_id = f"tool:{ts.name}"
+            g.add_node(Node(tool_id, "Tool", ts.name, {
                 "operation": cap.operation, "bulkAccess": cap.bulkAccess,
                 "dataClassification": cap.dataClassification, "humanApproval": cap.humanApproval,
-                "destructive": cap.destructive, "effective": cap.effective, "source": "mcp"}))
+                "destructive": cap.destructive, "effective": cap.effective, "source": ts.source}))
             g.add_edge(agent_id, CAN_INVOKE, tool_id)
             if ident is not None:
                 g.add_edge(tool_id, EXECUTES_AS, f"identity:{ident['subject']}")
@@ -107,14 +138,25 @@ def discover(cfg: dict, log=print) -> tuple[Graph, list[Capability], dict]:
                 g.add_node(Node(res_id, "Resource", cap.resource, {"type": "api"}))
                 g.add_node(Node(data_id, "Data", f"{cap.dataClassification.title()} data ({cap.resource})",
                                 {"classification": cap.dataClassification}))
-                g.add_edge(tool_id, ACCESSES, res_id, operationId=down.get("operationId"))
+                g.add_edge(tool_id, ACCESSES, res_id, operationId=ts.operationId)
                 g.add_edge(res_id, CONTAINS, data_id)
                 for scope in cap.requiredPermissions:
                     g.add_node(Node(f"perm:{scope}", "Permission", scope))
                     g.add_edge(tool_id, REQUIRES, f"perm:{scope}")
                     g.add_edge(f"perm:{scope}", GRANTS_ACCESS_TO, res_id)
 
-    raw["openapi"] = specs
+        for k in res.knowledge:
+            cls = k.get("dataClassification") or defaults.get("dataClassification") or "internal"
+            k["dataClassification"] = cls
+            res_id = f"knowledge:{k['name']}"
+            data_id = f"data:{k['name']}:{cls}"
+            g.add_node(Node(res_id, "Resource", k["name"], {"type": "knowledge", "kind": k.get("kind"),
+                                                           "scoped": k.get("scoped"), "detail": k.get("detail")}))
+            g.add_node(Node(data_id, "Data", f"{cls.title()} data ({k['name']})", {"classification": cls}))
+            g.add_edge(agent_id, GROUNDED_ON, res_id, scoped=k.get("scoped"))
+            g.add_edge(res_id, CONTAINS, data_id)
+
+    raw["knowledge"] = [k for r in found for k in r.knowledge]
     return g, caps, raw
 
 
@@ -122,14 +164,14 @@ def privileged(caps: list[Capability], scopes: list[str] | None) -> tuple[bool, 
     """An identity is privileged if it holds write/export/delete-class scopes."""
     if not scopes:
         return False, []
-    hits = [s for s in scopes if re.search(r"(write|export|delete|admin|\*)", s)]
+    hits = [s for s in scopes if re.search(r"(write|export|delete|admin|manage|\*)", s, re.I)]
     return bool(hits), hits
 
 
 def excess_permissions(caps: list[Capability], scopes: list[str] | None) -> list[str]:
     """Scopes held by the identity that no discovered tool requires."""
-    needed = {p for c in caps for p in c.requiredPermissions}
-    return sorted(set(scopes or []) - needed)
+    needed = {p.lower() for c in caps for p in c.requiredPermissions}
+    return sorted(s for s in set(scopes or []) if s.lower() not in needed)
 
 
 def max_classification(*levels: str) -> str:

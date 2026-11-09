@@ -1,0 +1,18 @@
+openapi: 3.0.1
+info: {title: Material API, version: "1.0"}
+servers: [{url: "https://api.company.com"}]
+paths:
+  /materials:
+    get:
+      operationId: searchMaterial
+      summary: Search materials by name
+      parameters: [{name: q, in: query, schema: {type: string}}]
+      x-data-classification: confidential
+      responses: {"200": {description: OK}}
+  /materials/{id}:
+    patch:
+      operationId: updateMaterial
+      summary: Update a material
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      x-data-classification: confidential
+      responses: {"200": {description: OK}}

@@ -124,8 +124,38 @@ hardened → 9/9 pass, only Info findings, gate **PASSED**.
 - Annotate tools with MCP `annotations` and `_meta.downstream` / `_meta.requiresApproval`, or use
   `overrides.tools` in `target.yaml`.
 
+## Agent platforms (adapters)
+
+A target is assembled from four pluggable adapter roles (`agentsec/platforms/`):
+
+| Role | What it does | Adapters |
+| --- | --- | --- |
+| **invoke** | send attack prompts, return reply + in-band tool events | `http-chat`, `foundry`, `copilot-studio`, `m365-copilot-chat` |
+| **discover** | list tools, knowledge, approvals | `mcp`, `openapi`, `foundry`, `copilot-studio`, `m365-package`, `forge-manifest` |
+| **telemetry** | prove which tools actually ran | in-band (run steps / plan events), `http-events`, `app-insights`, `log-analytics`, `copilot-studio-transcripts` |
+| **identity** | what the agent's identity may do | `oauth2-introspection`, `entra` (Graph app-role assignments), `static`, Forge scopes |
+
+| Platform | Invoke | Discover | Tool-call evidence | Templates |
+| --- | --- | --- | --- | --- |
+| Azure AI Foundry Agent Service | threads/runs API | `GET /assistants/{id}` (function, OpenAPI, MCP, connected agents, knowledge) | run steps; MCP approvals are denied and recorded as *blocked* | `examples/platforms/foundry.target.yaml` |
+| Copilot Studio | Direct Line | Dataverse `bots` + `botcomponents` (topics/actions, connectors) | `DynamicPlanStep*` activities, transcripts | `copilot-studio.target.yaml` |
+| Microsoft 365 Copilot (declarative agents) | Graph Copilot Chat API (beta) or a test harness | app package: manifest -> declarativeAgent -> plugins (OpenAPI / MCP runtimes), capabilities | your API / MCP logs | `m365.target.yaml`, `m365-appPackage/` |
+| Atlassian Rovo | none (no public API) - static only | Forge `manifest.yml` (`rovo:agent`, `action`, scopes, egress) | - | `rovo.target.yaml`, `rovo-app/` |
+
+Auth: `auth: {type: azure-cli | entra | bearer}` (`entra` = client credentials with `client_secret_env`).
+Scanner permissions: Foundry *Azure AI User*; Dataverse application user (read bot, botcomponent,
+conversationtranscript); Graph `Application.Read.All` for identity; App Insights *Reader* for KQL telemetry.
+
+The lab (`demo/lab.py`, started by the console) also runs **mock Foundry, Copilot Studio, Entra/Graph and
+M365 Copilot services** (ports 9300-9302) in front of the dummy agents, plus Rovo manifests, so every adapter
+can be demoed in the browser without a tenant.
+
+> **Caveat:** the adapters were built from the public API/SDK shapes and tested against these mocks,
+> not against real tenants. Unverified assumptions: Copilot Studio botcomponent YAML and `DynamicPlan*`
+> event names, transcript delay, Foundry default `require_approval`, M365/Rovo default confirmation rules,
+> and the M365 Copilot Chat API (beta, delegated-only, cannot pin a specific declarative agent).
+
 ## Not in the PoC yet
 
 Real MCP transports (stdio / SSE session handling), OTel ingestion, LLM-generated attack variants,
-multi-turn attacks, SARIF output, and adapters for LangGraph / Copilot Studio / AWS.
->>>>>>> master
+multi-turn attacks, SARIF output, adapters for LangGraph / AWS Bedrock, validation against real tenants.

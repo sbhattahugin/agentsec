@@ -1,0 +1,11 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/copilot/declarative-agent/v1.4/schema.json",
+  "version": "v1.4",
+  "name": "Engineering Agent",
+  "description": "Answers questions about engineering materials.",
+  "instructions": "Help engineers find material data. Never export the full catalogue.",
+  "capabilities": [
+    {"name": "OneDriveAndSharePoint", "items_by_url": [{"url": "https://contoso.sharepoint.com/sites/Materials"}]}
+  ],
+  "actions": [{"id": "materialApi", "file": "ai-plugin.json"}]
+}

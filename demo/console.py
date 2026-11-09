@@ -22,6 +22,7 @@ def main() -> None:
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8080)
     p.add_argument("--lab-port", type=int, default=9100, help="First port used by the dummy agents")
+    p.add_argument("--platform-port", type=int, default=9300, help="First port used by the mock platforms")
     p.add_argument("--no-browser", action="store_true")
     a = p.parse_args()
     for stream in (sys.stdout, sys.stderr):
@@ -31,7 +32,7 @@ def main() -> None:
             pass
     os.environ.setdefault("AGENTSEC_CLIENT_SECRET", "demo-secret")  # secret of the dummy agents only
     print("Starting dummy agents:")
-    lab.start(a.lab_port, a.host)
+    lab.start(a.lab_port, a.host, platform_port=a.platform_port)
     serve(ROOT / "targets", host=a.host, port=a.port, open_browser=not a.no_browser)
 
 

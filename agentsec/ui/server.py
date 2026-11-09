@@ -17,6 +17,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from .. import engine, policy, scanner
 from ..config import load_target
+from ..platforms import PLATFORM_NAMES, normalize
 from ..report import markdown
 
 STATIC = Path(__file__).with_name("static")
@@ -26,6 +27,13 @@ TYPES = {".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".s
 PACING = {"phase": 0.6, "test_start": 0.5, "test_response": 0.5, "test_telemetry": 0.6, "test_result": 0.7,
           "discovered": 0.4, "graph": 0.4, "static_findings": 0.5, "attack_paths": 0.6, "policy_results": 0.5,
           "risk": 0.5, "http": 0.03}
+
+
+def platform_name(cfg: dict) -> str:
+    spec = normalize(cfg)
+    key = cfg["target"].get("platform") or next((d.get("type") for d in spec["discovery"] if d.get("type") in PLATFORM_NAMES),
+                                                spec["invoker"] or "custom")
+    return PLATFORM_NAMES.get(key, key)
 
 
 class Console:
@@ -38,16 +46,22 @@ class Console:
     def targets(self) -> list[dict]:
         out = []
         for path in sorted(self.targets_dir.rglob("*.y*ml")):
+            if any(part.startswith(("_", ".")) for part in path.relative_to(self.targets_dir).parts[:-1]):
+                continue  # assets (app packages, manifests) referenced by targets
             try:
                 cfg = load_target(path)
             except Exception as e:  # noqa: BLE001
                 out.append({"file": self.rel(path), "error": str(e)})
                 continue
             t = cfg["target"]
+            spec = normalize(cfg)
             out.append({
                 "file": self.rel(path), "name": t["name"], "environment": t.get("environment"),
                 "description": t.get("description", ""), "labels": t.get("labels") or {},
-                "agent": cfg["agent"]["endpoint"], "connections": [c.get("type") for c in cfg["connections"]],
+                "platform": platform_name(cfg), "agent": spec["agent"].get("endpoint") or spec["agent"].get("project_endpoint")
+                or (spec["agent"].get("directline") or {}).get("endpoint") or spec["agent"].get("graph"),
+                "adapter": spec["invoker"], "connections": [d.get("type") for d in spec["discovery"]],
+                "telemetry": [x.get("type") for x in spec["telemetry"]],
                 "yaml": path.read_text(encoding="utf-8"),
             })
         order = {"vulnerable": 0, "hardened": 1}

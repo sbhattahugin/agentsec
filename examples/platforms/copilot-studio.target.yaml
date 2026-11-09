@@ -1,0 +1,28 @@
+# Microsoft Copilot Studio agent (generative orchestration).
+# Needs: Direct Line secret (Settings > Security > Web channel security) or the token endpoint;
+#        a Dataverse application user with read on bot / botcomponent / conversationtranscript.
+target:
+  name: hr-assistant
+  environment: test
+  platform: copilot-studio
+agent:
+  adapter: copilot-studio
+  directline:
+    secret_env: COPILOT_STUDIO_DIRECTLINE_SECRET
+    # token_endpoint: https://<env>.environment.api.powerplatform.com/powervirtualagents/botsbyschema/<schema>/directline/token?api-version=2022-03-01-preview
+  timeout: 60
+discovery:
+  - type: copilot-studio
+    environment_url: https://<org>.crm.dynamics.com
+    bot_schema: cr6a1_hrAssistant
+    auth: {type: entra, tenant_id: <tenant>, client_id: <app>, client_secret_env: DATAVERSE_CLIENT_SECRET}
+    connectors:                         # optional: connector -> OpenAPI to learn methods/scopes of each action
+      shared_employeeapi: ./specs/employee-api.yaml
+telemetry:
+  - type: copilot-studio-transcripts    # transcripts arrive after the conversation ends (minutes) - slow but authoritative
+    environment_url: https://<org>.crm.dynamics.com
+    auth: {type: entra, tenant_id: <tenant>, client_id: <app>, client_secret_env: DATAVERSE_CLIENT_SECRET}
+identity:
+  type: entra
+  app_id: <connection / service principal appId>
+  auth: {type: entra, tenant_id: <tenant>, client_id: <app>, client_secret_env: GRAPH_CLIENT_SECRET}

@@ -24,6 +24,7 @@ HAS_PERMISSION = "HAS_PERMISSION"
 REQUIRES = "REQUIRES"
 GRANTS_ACCESS_TO = "GRANTS_ACCESS_TO"
 CONTAINS = "CONTAINS"
+GROUNDED_ON = "GROUNDED_ON"
 
 
 @dataclass
@@ -86,6 +87,7 @@ class Capability:
     requiredPermissions: list[str]
     effective: bool  # does the executing identity actually hold requiredPermissions?
     resource: str | None = None
+    source: str = "mcp"  # which adapter reported it (mcp, foundry-openapi, m365-openapi, rovo-action, ...)
 
 
 @dataclass

@@ -1,0 +1,15 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/copilot/plugin/v2.2/schema.json",
+  "schema_version": "v2.2",
+  "name_for_human": "Material API",
+  "description_for_human": "Search and read engineering materials",
+  "functions": [
+    {"name": "searchMaterial", "description": "Search materials by name"},
+    {"name": "updateMaterial", "description": "Update a material",
+     "capabilities": {"confirmation": {"type": "AdaptiveCard", "title": "Update material?"}}}
+  ],
+  "runtimes": [
+    {"type": "OpenApi", "auth": {"type": "OAuthPluginVault", "reference_id": "<vault-id>"},
+     "spec": {"url": "openapi.yaml"}, "run_for_functions": ["searchMaterial", "updateMaterial"]}
+  ]
+}

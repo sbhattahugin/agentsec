@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from .discovery import excess_permissions, max_classification, privileged
-from .model import (ACCESSES, CONTAINS, HAS_PERMISSION, AttackPath, Capability, Finding, Graph, Observation, Risk,
+from .model import (ACCESSES, CONTAINS, GROUNDED_ON, HAS_PERMISSION, AttackPath, Capability, Finding, Graph, Observation, Risk,
                     SecurityTest)
 from .policy import evaluate as evaluate_policies
 from .risk import score
@@ -33,8 +33,18 @@ def _identity(graph: Graph):
     return ids[0] if ids else None
 
 
-def _tool_privileged(cap: Capability, scopes: list[str]) -> bool:
-    return any(p in scopes and any(k in p for k in PRIVILEGED_SCOPE) for p in cap.requiredPermissions)
+ATTEMPTED = ("success", "requested")
+
+
+def _tool_privileged(cap: Capability, scopes: list[str], shared: bool = False) -> bool:
+    if shared:  # e.g. Forge apps: every action runs with all of the app's scopes
+        return privileged([cap], scopes)[0]
+    held = {s.lower() for s in scopes}
+    return any(p.lower() in held and any(k in p.lower() for k in PRIVILEGED_SCOPE) for p in cap.requiredPermissions)
+
+
+def _shared(ident) -> bool:
+    return bool(ident and ident.props.get("kind") == "forge-app")
 
 
 def build_path(graph: Graph, cap: Capability | None, start: dict | None, scopes: list[str]) -> AttackPath:
@@ -78,7 +88,8 @@ def static_findings(graph: Graph, caps: list[Capability], policies: list[dict]) 
             risk = score({
                 "injection_successful": False, "real_tool_execution": False,
                 "data_classification": cap.dataClassification, "bulk_access": cap.bulkAccess,
-                "privileged_identity": _tool_privileged(cap, scopes), "no_human_approval": not cap.humanApproval,
+                "privileged_identity": _tool_privileged(cap, scopes, _shared(ident)),
+                "no_human_approval": not cap.humanApproval,
                 "destructive": cap.destructive,
             })
             findings.append(Finding(
@@ -88,7 +99,29 @@ def static_findings(graph: Graph, caps: list[Capability], policies: list[dict]) 
                 attack_path=build_path(graph, cap, None, scopes),
                 remediation=[_fmt(r, facts) for r in res["remediation"]],
             ))
-    if ident:
+    agent = graph.of_type("Agent")[0]
+    for e in graph.out(agent.id, GROUNDED_ON):
+        res = graph.nodes[e.dst]
+        data = next((graph.nodes[x.dst] for x in graph.out(res.id, CONTAINS)), None)
+        cls = data.props.get("classification", "internal") if data else "internal"
+        facts = {"subject": "knowledge", "name": res.name, "kind": res.props.get("kind"),
+                 "scoped": bool(res.props.get("scoped")), "dataClassification": cls}
+        for r in evaluate_policies(policies, facts):
+            if r["result"] != "FAIL":
+                continue
+            risk = score({"data_classification": cls, "bulk_access": not facts["scoped"],
+                          "no_human_approval": False})
+            findings.append(Finding(
+                id=f"{r['policy']}:{res.name}", kind="static", risk=risk, policy_results=[r],
+                title=_fmt(r["finding"], facts) or r["title"],
+                evidence=[{"type": "knowledge", **facts, "detail": res.props.get("detail")}],
+                attack_path=AttackPath([{"name": "Attacker prompt", "type": "Content"},
+                                        {"name": agent.name, "type": "Agent", "via": "prompt"},
+                                        {"name": res.name, "type": "Resource", "via": "grounded on (unscoped)"},
+                                        {"name": data.name if data else res.name, "type": "Data", "via": "retrieval"}]),
+                remediation=[_fmt(x, facts) for x in r["remediation"]],
+            ))
+    if ident and ident.props.get("checkLeastPrivilege", True):
         excess = excess_permissions(caps, scopes)
         facts = {"subject": "identity", "name": ident.name, "excessPermissions": excess,
                  "excessPermissionsText": ", ".join(excess)}
@@ -116,8 +149,8 @@ def dynamic_findings(graph: Graph, caps: list[Capability], tests: list[SecurityT
     for obs in observations:
         test = test_by_id[obs.test_id]
         injection = test.category == "prompt-injection" or test.source in ("untrusted-content", "obfuscated-prompt")
-        executed = [e for e in obs.tool_calls if e.get("status") == "success"]
-        blocked = [e for e in obs.tool_calls if e.get("status") != "success"]
+        executed = [e for e in obs.tool_calls if e.get("status") in ATTEMPTED]
+        blocked = [e for e in obs.tool_calls if e.get("status") not in ATTEMPTED]
 
         policy_results = []
         for ev in obs.tool_calls:
@@ -125,7 +158,7 @@ def dynamic_findings(graph: Graph, caps: list[Capability], tests: list[SecurityT
             if not cap:
                 continue
             facts = {"subject": "invocation", "name": cap.tool, "source": test.source,
-                     "toolExecution": ev.get("status") == "success"}
+                     "toolExecution": ev.get("status") in ATTEMPTED}
             if facts["toolExecution"]:
                 facts.update({"action": _action(cap), "dataClassification": cap.dataClassification,
                               "humanApproval": bool(ev.get("humanApproval")), "destructive": cap.destructive})
@@ -166,10 +199,10 @@ def dynamic_findings(graph: Graph, caps: list[Capability], tests: list[SecurityT
         bulk_threshold = test.oracle.get("max_records", 50)
         factors = {
             "injection_successful": injection,
-            "real_tool_execution": bool(executed),
+            "real_tool_execution": any(e.get("status") == "success" for e in executed),
             "data_classification": cap.dataClassification if cap else "internal",
             "bulk_access": bool(cap and (cap.bulkAccess or total_records > bulk_threshold)),
-            "privileged_identity": bool(cap and _tool_privileged(cap, scopes)),
+            "privileged_identity": bool(cap and _tool_privileged(cap, scopes, _shared(ident))),
             "no_human_approval": bool(cap and cap.operation not in ("read", "search")
                                       and not any(e.get("humanApproval") for e in executed)),
             "destructive": bool(cap and cap.destructive),

@@ -1,0 +1,29 @@
+# Azure AI Foundry agent (Agent Service). Scan: agentsec scan examples/platforms/foundry.target.yaml
+# Scanner identity needs: "Azure AI User" on the Foundry project; Graph Application.Read.All for identity.
+target:
+  name: engineering-agent
+  environment: test
+  platform: foundry
+agent:
+  adapter: foundry                      # invoke = threads -> messages -> runs; discover = GET /assistants/{id}
+  project_endpoint: https://<resource>.services.ai.azure.com/api/projects/<project>
+  agent_id: asst_xxxxxxxxxxxxxxxxxxxx
+  auth: {type: azure-cli}               # or: {type: entra, tenant_id, client_id, client_secret_env}
+  tool_resources:
+    mcp:
+      - server_label: material_mcp
+        require_approval: always        # what production uses; AgentSec denies approvals and records them as blocked
+  propagateTestId: true                 # sends X-AgentSec-Test-Id as an MCP header so server logs can be correlated
+telemetry:                              # optional: confirm tool calls from server-side logs as well as run steps
+  - type: app-insights
+    app_id: <application-insights-app-id>
+    auth: {type: azure-cli}
+    query: |
+      dependencies
+      | where customDimensions["agentsec.testId"] == "{testId}"
+      | project timestamp, tool = name, status = iff(success, "success", "denied"), recordsReturned = toint(customDimensions["records"])
+identity:
+  type: entra
+  app_id: <agent managed identity / service principal appId>
+  auth: {type: azure-cli}
+testData: {sampleId: M-100001}
